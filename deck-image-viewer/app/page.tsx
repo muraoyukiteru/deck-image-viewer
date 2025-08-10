@@ -7,7 +7,6 @@ type ApiResult = {
   source: string;
   count: number;
   images: string[];
-  counts?: Record<string, number>;
   error?: string;
 };
 
@@ -43,7 +42,12 @@ export default function Page() {
   return (
     <main className="space-y-6">
       <h1 className="text-3xl font-semibold tracking-tight">Deck Image Viewer</h1>
-      <p className="text-sm text-neutral-600">URL（例：<code className="px-1 bg-neutral-100 rounded">https://www.pokemon-card.com/deck/deck.html?deckID=…</code>）またはデッキコード（例：<code className="px-1 bg-neutral-100 rounded">ggnNQ9-cFqwyn-NLLn6Q</code>）を入力して、カードの JPG を 1 ページに表示します。数量があるカードは同じ画像が複数表示されます（例：×2 → 同じ画像が2枚）。</p>
+      <p className="text-sm text-neutral-600">
+        URL（例：<code className="px-1 bg-neutral-100 rounded">https://www.pokemon-card.com/deck/deck.html?deckID=…</code>）
+        またはデッキコード（例：<code className="px-1 bg-neutral-100 rounded">ggnNQ9-cFqwyn-NLLn6Q</code>）を入力して、
+        カードの JPG を 1 ページに表示します。<br/>
+        <strong>数量があるカードは同じ画像がその枚数分だけ表示</strong>されます（×2 → 2枚）。
+      </p>
 
       <form onSubmit={handleSubmit} className="flex items-center gap-2">
         <input
@@ -69,7 +73,7 @@ export default function Page() {
 
       <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
         {images.map((src, i) => (
-          <a key={src + ':' + i} href={src} target="_blank" rel="noreferrer" className="block group">
+          <a key={`${src}:${i}`} href={src} target="_blank" rel="noreferrer" className="block group">
             <img src={src} alt="card" className="w-full h-auto rounded-2xl shadow border border-neutral-200 group-hover:opacity-90"/>
           </a>
         ))}

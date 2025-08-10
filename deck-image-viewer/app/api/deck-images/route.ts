@@ -1,4 +1,3 @@
-
 import { NextRequest, NextResponse } from 'next/server';
 import chromium from '@sparticuz/chromium';
 import puppeteerCore from 'puppeteer-core';
@@ -37,58 +36,7 @@ export async function GET(req: NextRequest) {
     const page = await browser.newPage();
     await page.goto(source, { waitUntil: 'networkidle0', timeout: 30_000 });
 
-    // 1) Collect quantities in list view
-    type CountEntry = [string, number];
-    let countEntries: CountEntry[] = [];
-    try {
-      const [listBtn] = await page.$x("//*[contains(text(),'リスト表示')]");
-      if (listBtn) {
-        await listBtn.click();
-        await page.waitForNetworkIdle({ idleTime: 700, timeout: 10_000 }).catch(() => {});
-      }
-      await page.waitForSelector("a[href*='/card/'], a[href*='card-search']", { timeout: 8_000 }).catch(() => {});
-
-      countEntries = await page.evaluate(() => {
-        const map = new Map<string, number>();
-        const normalize = (href: string) => {
-          try { const u = new URL(href, location.href); return u.pathname + u.search; } catch { return href; }
-        };
-        const rows: Element[] = Array.from(document.querySelectorAll('li, tr, .list, .selected, .deck, .card, .decklist, .deck_list'));
-        for (const row of rows) {
-          const a = row.querySelector("a[href*='/card/'], a[href*='card-search']") as HTMLAnchorElement | null;
-          if (!a) continue;
-          const key = normalize(a.getAttribute('href') || '');
-          if (!key) continue;
-
-          // gather texts in row to find patterns like ×2 or 2枚
-          const texts: string[] = [];
-          row.querySelectorAll('*').forEach((el) => {
-            const t = (el as HTMLElement).innerText?.trim();
-            if (t) texts.push(t);
-          });
-          let qty = 0;
-          for (const t of texts) {
-            let m = t.match(/×\s*(\d{1,2})/);
-            if (!m) m = t.match(/(\d{1,2})\s*枚/);
-            if (m) { qty = Math.max(qty, parseInt(m[1], 10)); }
-          }
-          if (qty === 0) {
-            const numEl = row.querySelector("[class*='num'],[class*='count'],[class*='qty']") as HTMLElement | null;
-            if (numEl) {
-              const m = (numEl.innerText || '').trim().match(/\d{1,2}/);
-              if (m) qty = parseInt(m[0], 10);
-            }
-          }
-          if (qty > 0) map.set(key, qty);
-        }
-        return Array.from(map.entries());
-      });
-    } catch {}
-
-    const counts: Record<string, number> = {};
-    for (const [k, v] of countEntries) counts[k] = v;
-
-    // 2) Switch to image view and collect images + href
+    // 画像表示へ
     try {
       const [imgBtn] = await page.$x("//*[contains(text(),'画像表示')]");
       if (imgBtn) {
@@ -99,42 +47,67 @@ export async function GET(req: NextRequest) {
 
     await page.waitForSelector("img[src*='card_images']", { timeout: 12_000 }).catch(() => {});
 
-    const items: { src: string; href: string }[] = await page.evaluate(() => {
+    // 画像タイルから枚数バッジを推定して複製数を決める
+    const items: { src: string; qty: number }[] = await page.evaluate(() => {
       const abs = (u: string) => { try { return new URL(u, location.href).href; } catch { return u; } };
-      const list: { src: string; href: string }[] = [];
+      const list: { src: string; qty: number }[] = [];
       const imgs = Array.from(document.querySelectorAll<HTMLImageElement>("img[src*='card_images']"));
       for (const img of imgs) {
         const src = abs(img.getAttribute('src') || (img as any).src || '');
-        const a = img.closest('a') as HTMLAnchorElement | null;
-        let href = '';
-        if (a && a.getAttribute('href')) {
-          try { const u = new URL(a.getAttribute('href')!, location.href); href = u.pathname + u.search; } catch { href = a.getAttribute('href')!; }
+        const tile = img.closest('li, .list, .card, .deck, .item, .thumb, .image, .img, .inner, .box') || img.parentElement;
+        let qty = 1;
+        if (tile) {
+          const texts: string[] = [];
+          tile.querySelectorAll<HTMLElement>('*').forEach(el => {
+            const t = (el.innerText || '').trim();
+            if (t) texts.push(t);
+          });
+          const candidates: number[] = [];
+          for (const t of texts) {
+            const m1 = t.match(/[×x]\s*([0-9]{1,2})/i);
+            if (m1) { candidates.push(parseInt(m1[1], 10)); continue; }
+            const m2 = t.match(/([0-9]{1,2})\s*枚/);
+            if (m2) { candidates.push(parseInt(m2[1], 10)); continue; }
+            const m3 = t.match(/^[0-9]{1,2}$/);
+            if (m3) { candidates.push(parseInt(m3[0], 10)); }
+          }
+          if (candidates.length) {
+            const max = Math.max(...candidates);
+            if (max >= 2) qty = max;
+          }
         }
-        list.push({ src, href });
+        list.push({ src, qty });
       }
-      const seen = new Set<string>();
-      const uniq: { src: string; href: string }[] = [];
+      // 同じsrcが複数ある場合は最大qtyを採用
+      const map = new Map<string, number>();
       for (const it of list) {
-        const key = it.href || it.src;
-        if (seen.has(key)) continue;
-        seen.add(key);
-        uniq.push(it);
+        const prev = map.get(it.src) || 0;
+        if (it.qty > prev) map.set(it.src, it.qty);
       }
-      return uniq;
+      return Array.from(map.entries()).map(([src, qty]) => ({ src, qty }));
     });
 
-    // 3) Expand images according to counts
-    let expanded: string[] = [];
+    let images: string[] = [];
     for (const it of items) {
-      const qty = counts[it.href] || 1;
-      for (let i = 0; i < qty; i++) expanded.push(it.src);
+      const n = Math.max(1, Math.min(60, Math.floor(it.qty || 1)));
+      for (let i = 0; i < n; i++) images.push(it.src);
     }
-    if (expanded.length === 0) expanded = items.map((i) => i.src);
+    if (images.length === 0) {
+      // フォールバック：従来の一意リスト
+      images = await page.$$eval('img', (nodes) => {
+        const abs = (u: string) => { try { return new URL(u, location.href).href; } catch { return u; } };
+        const urls = Array.from(nodes)
+          .map(n => (n as HTMLImageElement).src || (n as HTMLImageElement).getAttribute('src') || '')
+          .map(abs)
+          .filter(u => /\.jpg(\?.*)?$/i.test(u))
+          .filter(u => u.includes('/card_images/'));
+        return Array.from(new Set(urls));
+      });
+    }
 
     await page.close();
     await browser.close().catch(() => {});
-
-    return NextResponse.json({ deckId, source, count: expanded.length, images: expanded, counts }, { status: 200 });
+    return NextResponse.json({ deckId, source, count: images.length, images }, { status: 200 });
   } catch (err: any) {
     try { await browser?.close(); } catch {}
     return NextResponse.json({ error: String(err), at: 'browser' }, { status: 500 });
