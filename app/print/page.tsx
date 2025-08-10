@@ -11,12 +11,13 @@ function chunk<T>(arr: T[], size: number): T[][] {
   return out;
 }
 
-// 既定の補正係数（ユーザー実測を基に +2.8%）
-const DEFAULT_K = 1.028; // 約2.8%拡大
+const DEFAULT_K = 1.028; // 実寸補正の既定値（約 +2.8%）
 
 export default function PrintPage() {
   const [cards, setCards] = useState<Card[]>([]);
   const [k, setK] = useState<number>(DEFAULT_K);
+  // ★ デフォルトOFF、毎回OFFで開始（永続化しない）
+  const [includeEnergy, setIncludeEnergy] = useState<boolean>(false);
 
   useEffect(() => {
     try {
@@ -29,44 +30,37 @@ export default function PrintPage() {
     } catch {}
   }, []);
 
-  // 保存済みの補正値を読み込み
+  // k（倍率）のみ永続化を維持
   useEffect(() => {
     try {
       const saved = parseFloat(localStorage.getItem('print-k') || '');
       if (Number.isFinite(saved) && saved > 0.9 && saved < 1.1) setK(saved);
     } catch {}
   }, []);
-
-  // CSS 変数へ適用
   useEffect(() => {
     document.documentElement.style.setProperty('--print-k', String(k));
     try { localStorage.setItem('print-k', String(k)); } catch {}
   }, [k]);
 
-  // 基本エネルギー(E_KIHON) は印刷表示では除外
-  const cardsNoEnergy = useMemo(
-    () => cards.filter(c => !(c.src || '').includes('E_KIHON')),
-    [cards]
+  const filtered = useMemo(
+    () => includeEnergy ? cards : cards.filter(c => !(c.src || '').includes('E_KIHON')),
+    [cards, includeEnergy]
   );
 
-  // 画像URLを数量分展開
   const urls = useMemo(() => {
     const u: string[] = [];
-    for (const c of cardsNoEnergy) for (let i=0; i<c.qty; i++) u.push(c.src);
+    for (const c of filtered) for (let i=0; i<c.qty; i++) u.push(c.src);
     return u;
-  }, [cardsNoEnergy]);
+  }, [filtered]);
 
-  // A4 1ページに 3x3 = 9 枚
   const pages = useMemo(() => chunk(urls, 9), [urls]);
 
   return (
     <main className="a4-print">
-      {/* 印刷用の固定レイアウトCSS（補正係数 --print-k を掛ける）と切り取り線 */}
       <style jsx global>{`
         :root { --print-k: ${DEFAULT_K}; --mk-len: 5mm; --mk-thick: 0.2mm; }
         @page { size: A4 portrait; margin: 0; }
         @media print {
-          html, body { width: 210mm; height: 297mm; background: #fff !important; }
           .no-print { display: none !important; }
         }
         .a4-print { background: #fff; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
@@ -74,10 +68,16 @@ export default function PrintPage() {
           width: 210mm;
           height: 297mm;
           margin: 0 auto;
-          page-break-after: always;
           display: flex;
-          align-items: center;    /* 余白を上下に均等配分 */
-          justify-content: center;/* 左右中央寄せ */
+          align-items: center;
+          justify-content: center;
+          box-sizing: border-box;
+          break-after: page;
+          page-break-after: always;
+        }
+        .a4-page:last-of-type {
+          break-after: auto !important;
+          page-break-after: auto !important;
         }
         .a4-grid {
           width: calc(3 * 63mm * var(--print-k));
@@ -85,43 +85,32 @@ export default function PrintPage() {
           display: grid;
           grid-template-columns: repeat(3, calc(63mm * var(--print-k)));
           grid-template-rows: repeat(3, calc(88mm * var(--print-k)));
-          gap: 0; /* 隙間なし */
+          gap: 0;
         }
         .slot {
           position: relative;
           width: calc(63mm * var(--print-k));
           height: calc(88mm * var(--print-k));
-          overflow: visible; /* 切り取り線を外側に出す */
+          overflow: visible;
         }
         .slot img {
           display: block;
           width: calc(63mm * var(--print-k));
           height: calc(88mm * var(--print-k));
-          object-fit: contain; /* 画像比率を維持（切り抜きしない） */
+          object-fit: contain;
           background: #fff;
         }
-
-        /* === 切り取り線（印刷時も確実に出るように border を使用） === */
         .mk { position: absolute; pointer-events: none; }
-
-        /* 縦線：border-left、横線：border-top を使う（背景塗りではないので背景グラフィック無効でも出る） */
         .mk.v   { width: 0; height: var(--mk-len); border-left: var(--mk-thick) solid #000; }
         .mk.h   { width: var(--mk-len); height: 0; border-top: var(--mk-thick) solid #000; }
-
-        /* 上外側／下外側 */
         .mk.top    { top: calc(-1 * var(--mk-len)); }
         .mk.bottom { top: 100%; }
-
-        /* 左外側／右外側 */
         .mk.left  { left: calc(-1 * var(--mk-len)); }
         .mk.right { left: 100%; }
-
-        /* 角の位置決め（線の起点はカードの辺の「端」） */
         .mk.tl { left: 0; }
-        .mk.tr { left: 100%; transform: translateX(-1px); } /* 微妙な重なり防止 */
+        .mk.tr { left: 100%; transform: translateX(-1px); }
         .mk.bl { left: 0; }
         .mk.br { left: 100%; transform: translateX(-1px); }
-
         .mk.lt { top: 0; }
         .mk.lb { top: 100%; transform: translateY(-1px); }
         .mk.rt { top: 0; }
@@ -132,7 +121,6 @@ export default function PrintPage() {
         <button onClick={() => window.print()} className="px-4 py-2 rounded-2xl bg-blue-600 text-white shadow">印刷</button>
         <button onClick={() => window.close()} className="px-4 py-2 rounded-2xl bg-gray-500 text-white shadow">閉じる</button>
 
-        {/* 補正コントロール */}
         <label className="text-sm text-neutral-700" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           補正（63×88に実測を合わせる倍率）
           <input
@@ -145,7 +133,24 @@ export default function PrintPage() {
             className="w-24 text-right rounded-md border px-2 py-1"
           />
         </label>
-        <span className="text-xs text-neutral-500">例: 1.000（補正なし）, 1.028（+2.8%）</span>
+
+        <label className="text-sm text-neutral-700" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <input
+            type="checkbox"
+            checked={includeEnergy}
+            onChange={e => setIncludeEnergy(e.target.checked)}
+          />
+          基本エネルギーも印刷する
+        </label>
+
+        <span className="text-sm text-neutral-600">
+          対象: <b>{urls.length}</b> 枚（ページ数: <b>{pages.length}</b>）
+        </span>
+        {!includeEnergy && (
+          <span className="text-xs text-neutral-500">
+            ※ 基本エネルギーは現在印刷対象外です
+          </span>
+        )}
       </div>
 
       {pages.map((urls9, pi) => (
