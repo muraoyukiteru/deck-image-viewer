@@ -48,21 +48,20 @@ export async function GET(req: NextRequest) {
       }
     }
 
-    // result.html には #cardListView（非表示でもDOM上に存在）がある想定
     await gotoEither(resultUrl, confirmUrl);
 
-    // --- 1) リスト表(#cardListView)で「◯枚」を読む → 6桁コードで数量マップ化 ---
+    // 1) read counts from list table (#cardListView)
     const countByCode: Record<string, number> = await page.evaluate(() => {
       const pad6 = (n: string) => (n || '').padStart(6, '0');
       const codeFromId = (id: string | null): string | null => {
-        if (!id) return null;                       // id="cardName_44603"
+        if (!id) return null;
         const m = id.match(/cardName_(\d{1,6})/);
-        return m ? pad6(m[1]) : null;               // → "044603"
+        return m ? pad6(m[1]) : null;
       };
       const codeFromOnclick = (onclick: string | null): string | null => {
-        if (!onclick) return null;                  // onclick="PCGDECK.cardDetailViewCall('44603')"
+        if (!onclick) return null;
         const m = onclick.match(/cardDetailViewCall\('(\d{1,6})'\)/);
-        return m ? pad6(m[1]) : null;               // → "044603"
+        return m ? pad6(m[1]) : null;
       };
 
       const map = new Map<string, number>();
@@ -73,8 +72,6 @@ export async function GET(req: NextRequest) {
         if (!a) continue;
         const code = codeFromId(a.getAttribute('id')) || codeFromOnclick(a.getAttribute('onclick'));
         if (!code) continue;
-
-        // 右側の数量セル例: <td class="nowrap"><span>4枚</span></td>
         const qtyCell = tr.querySelector('td.nowrap, td:last-child');
         let qty = 0;
         if (qtyCell) {
@@ -84,13 +81,11 @@ export async function GET(req: NextRequest) {
         }
         if (qty > 0) map.set(code, qty);
       }
-
       const out: Record<string, number> = {};
       for (const [k, v] of map.entries()) out[k] = v;
       return out;
     });
 
-    // 見つからない場合は「リスト表示」ボタンを押してから再スキャン（保険）
     let counts = countByCode;
     if (Object.keys(counts).length === 0) {
       try {
@@ -137,7 +132,7 @@ export async function GET(req: NextRequest) {
       });
     }
 
-    // --- 2) ページの画像URLを集め、ファイル名から6桁コードを抽出 ---
+    // 2) collect image src + code
     await page.waitForSelector("img[src*='card_images']", { timeout: 12_000 }).catch(() => {});
     const items: { code: string | null; src: string }[] = await page.evaluate(() => {
       const abs = (u: string) => { try { return new URL(u, location.href).href; } catch { return u; } };
@@ -151,7 +146,6 @@ export async function GET(req: NextRequest) {
         const s = abs(img.getAttribute('src') || (img as any).src || '');
         list.push({ code: codeFromSrc(s), src: s });
       }
-      // 重複DOM排除
       const seen = new Set<string>();
       const uniq: { code: string | null; src: string }[] = [];
       for (const it of list) {
@@ -162,20 +156,23 @@ export async function GET(req: NextRequest) {
       return uniq;
     });
 
-    // --- 3) 「◯枚」ぶん URL を展開 ---
-    const images: string[] = [];
+    // 3) expand by counts
+    let images: string[] = [];
     for (const it of items) {
       const qty = Math.max(1, Math.min(60, counts[it.code || ''] || 1));
       for (let i = 0; i < qty; i++) images.push(it.src);
     }
+
+    // 4) filter out E_KIHON cards
+    images = images.filter(src => !src.includes('E_KIHON'));
 
     await page.close();
     await browser.close().catch(() => {});
 
     if (debug) {
       return NextResponse.json({
-        version: 'qty-join-by-element-mai',
-        usedUrl,
+        version: 'qty-join-by-element-mai+filter',
+        deckId, source: usedUrl,
         countsSample: Object.entries(counts).slice(0, 12),
         itemSample: items.slice(0, 10),
         count: images.length,
@@ -183,7 +180,7 @@ export async function GET(req: NextRequest) {
       }, { status: 200 });
     }
 
-    return NextResponse.json({ version: 'qty-join-by-element-mai', count: images.length, images }, { status: 200 });
+    return NextResponse.json({ version: 'qty-join-by-element-mai+filter', deckId, source: usedUrl, count: images.length, images }, { status: 200 });
   } catch (err: any) {
     try { await browser?.close(); } catch {}
     return NextResponse.json({ error: String(err), at: 'browser' }, { status: 500 });
