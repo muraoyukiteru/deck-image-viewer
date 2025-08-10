@@ -11,7 +11,7 @@ function chunk<T>(arr: T[], size: number): T[][] {
   return out;
 }
 
-// 既定の補正係数（ユーザー実測: 横63→61.5, 縦88→85.5 から平均的に推定）
+// 既定の補正係数（ユーザー実測を基に +2.8%）
 const DEFAULT_K = 1.028; // 約2.8%拡大
 
 export default function PrintPage() {
@@ -61,15 +61,15 @@ export default function PrintPage() {
 
   return (
     <main className="a4-print">
-      {/* 印刷用の固定レイアウトCSS（補正係数 --print-k を掛ける） */}
+      {/* 印刷用の固定レイアウトCSS（補正係数 --print-k を掛ける）と切り取り線 */}
       <style jsx global>{`
-        :root { --print-k: ${DEFAULT_K}; }
+        :root { --print-k: ${DEFAULT_K}; --mk-len: 5mm; --mk-thick: 0.2mm; }
         @page { size: A4 portrait; margin: 0; }
         @media print {
           html, body { width: 210mm; height: 297mm; background: #fff !important; }
           .no-print { display: none !important; }
         }
-        .a4-print { background: #fff; }
+        .a4-print { background: #fff; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
         .a4-page {
           width: 210mm;
           height: 297mm;
@@ -88,9 +88,10 @@ export default function PrintPage() {
           gap: 0; /* 隙間なし */
         }
         .slot {
+          position: relative;
           width: calc(63mm * var(--print-k));
           height: calc(88mm * var(--print-k));
-          overflow: hidden;
+          overflow: visible; /* 切り取り線を外側に出す */
         }
         .slot img {
           display: block;
@@ -99,6 +100,32 @@ export default function PrintPage() {
           object-fit: contain; /* 画像比率を維持（切り抜きしない） */
           background: #fff;
         }
+
+        /* === 切り取り線（印刷時も確実に出るように border を使用） === */
+        .mk { position: absolute; pointer-events: none; }
+
+        /* 縦線：border-left、横線：border-top を使う（背景塗りではないので背景グラフィック無効でも出る） */
+        .mk.v   { width: 0; height: var(--mk-len); border-left: var(--mk-thick) solid #000; }
+        .mk.h   { width: var(--mk-len); height: 0; border-top: var(--mk-thick) solid #000; }
+
+        /* 上外側／下外側 */
+        .mk.top    { top: calc(-1 * var(--mk-len)); }
+        .mk.bottom { top: 100%; }
+
+        /* 左外側／右外側 */
+        .mk.left  { left: calc(-1 * var(--mk-len)); }
+        .mk.right { left: 100%; }
+
+        /* 角の位置決め（線の起点はカードの辺の「端」） */
+        .mk.tl { left: 0; }
+        .mk.tr { left: 100%; transform: translateX(-1px); } /* 微妙な重なり防止 */
+        .mk.bl { left: 0; }
+        .mk.br { left: 100%; transform: translateX(-1px); }
+
+        .mk.lt { top: 0; }
+        .mk.lb { top: 100%; transform: translateY(-1px); }
+        .mk.rt { top: 0; }
+        .mk.rb { top: 100%; transform: translateY(-1px); }
       `}</style>
 
       <div className="no-print" style={{ padding: '12px', display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
@@ -124,11 +151,39 @@ export default function PrintPage() {
       {pages.map((urls9, pi) => (
         <section className="a4-page" key={pi}>
           <div className="a4-grid">
-            {urls9.map((src, i) => (
-              <div className="slot" key={`${src}:${i}`}>
-                <img src={src} alt={`card-${i}`} />
-              </div>
-            ))}
+            {urls9.map((src, i) => {
+              const row = Math.floor(i / 3);
+              const col = i % 3;
+              const isTop = row === 0;
+              const isBottom = row === 2;
+              const isLeft = col === 0;
+              const isRight = col === 2;
+              return (
+                <div className="slot" key={`${src}:${i}`}>
+                  <img src={src} alt={`card-${i}`} />
+                  {/* 上辺のガイド（外側へ） */}
+                  {isTop && (<>
+                    <span className="mk v top tl" />
+                    <span className="mk v top tr" />
+                  </>)}
+                  {/* 下辺のガイド（外側へ） */}
+                  {isBottom && (<>
+                    <span className="mk v bottom bl" />
+                    <span className="mk v bottom br" />
+                  </>)}
+                  {/* 左辺のガイド（外側へ） */}
+                  {isLeft && (<>
+                    <span className="mk h left lt" />
+                    <span className="mk h left lb" />
+                  </>)}
+                  {/* 右辺のガイド（外側へ） */}
+                  {isRight && (<>
+                    <span className="mk h right rt" />
+                    <span className="mk h right rb" />
+                  </>)}
+                </div>
+              );
+            })}
           </div>
         </section>
       ))}
