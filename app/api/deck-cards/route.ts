@@ -1,4 +1,3 @@
-
 import { NextRequest, NextResponse } from 'next/server';
 import chromium from '@sparticuz/chromium';
 import puppeteerCore from 'puppeteer-core';
@@ -64,14 +63,14 @@ export async function GET(req: NextRequest) {
     const listData: Array<{code: string, name: string, qty: number}> = await page.evaluate(() => {
       const pad6 = (n: string) => (n || '').padStart(6, '0');
       const codeFromId = (id: string | null): string | null => {
-        if (!id) return null;
+        if (!id) return null;                       // id="cardName_44603"
         const m = id.match(/cardName_(\d{1,6})/);
-        return m ? pad6(m[1]) : null;
+        return m ? pad6(m[1]) : null;               // → "044603"
       };
       const codeFromOnclick = (onclick: string | null): string | null => {
-        if (!onclick) return null;
+        if (!onclick) return null;                  // onclick="PCGDECK.cardDetailViewCall('44603')"
         const m = onclick.match(/cardDetailViewCall\('(\d{1,6})'\)/);
-        return m ? pad6(m[1]) : null;
+        return m ? pad6(m[1]) : null;               // → "044603"
       };
 
       const rows = Array.from((document.querySelector('#cardListView') || document.body).querySelectorAll('tr'));
@@ -83,6 +82,7 @@ export async function GET(req: NextRequest) {
         if (!code) continue;
         let name = (a.textContent || '').split('\n')[0].trim();
         if (!name) name = a.getAttribute('aria-label') || '';
+
         const qtyCell = tr.querySelector('td.nowrap, td:last-child');
         let qty = 0;
         if (qtyCell) {
@@ -128,7 +128,9 @@ export async function GET(req: NextRequest) {
     await page.close();
     await browser.close().catch(() => {});
 
+    // join & de-duplicate
     const cards = listData.map(row => ({ ...row, src: codeToSrc[row.code] })).filter(c => !!c.src);
+
     return NextResponse.json({ cards }, { status: 200 });
   } catch (err: any) {
     try { await browser?.close(); } catch {}
