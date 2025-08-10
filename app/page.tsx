@@ -21,6 +21,11 @@ export default function Page() {
   const [cards, setCards] = useState<Card[]>([]);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+
+  // Reorder states for drag & drop
+  const [dragIndex, setDragIndex] = useState<number | null>(null);
+  const [overIndex, setOverIndex] = useState<number | null>(null);
+
   const allSelected = useMemo(() => cards.length>0 && cards.every(c=>c.selected), [cards]);
 
   const totalSelected = useMemo(
@@ -60,13 +65,14 @@ export default function Page() {
         setCards(prev => {
           const map = new Map(prev.map(c=>[c.code,{...c}]));
           if (map.has(code)) { const ex = map.get(code)!; ex.qty = Math.min(99, ex.qty+1); ex.src ||= v; ex.name ||= base; ex.selected = true; return Array.from(map.values()); }
+          // new card to FRONT
           return [{ code, name: base||code, qty: 1, src: v, selected: true }, ...prev];
         });
       } else {
         const add = await fetchCardsFrom(v);
         setCards(prev => {
           const map = new Map(prev.map(c=>[c.code,{...c}]));
-          const newOnes: any[] = [];
+          const newOnes: Card[] = [];
           for (const c of add) {
             const ex = map.get(c.code);
             if (ex) {
@@ -78,6 +84,7 @@ export default function Page() {
               map.set(c.code, { ...c, selected: true });
             }
           }
+          // insert new deck items at FRONT in their fetched order
           return [...newOnes, ...prev.map(c => map.get(c.code)! )];
         });
       }
@@ -97,17 +104,43 @@ export default function Page() {
   function openPrint(){ const selected = cards.filter(c=>c.selected && c.qty>0 && c.src); localStorage.setItem('proxy-print-v1', JSON.stringify({ deck, cards: selected })); window.open('/print','_blank'); }
   function openThumbs(){ const selected = cards.filter(c=>c.selected && c.qty>0 && c.src); localStorage.setItem('proxy-thumbs-v1', JSON.stringify({ deck, cards: selected })); window.open('/thumbs','_blank'); }
 
-  function moveLeft(i: number){
-    if (i<=0) return;
-    setCards(cs => { const next = cs.slice(); const t = next[i-1]; next[i-1] = next[i]; next[i] = t; return next; });
-  }
-  function moveRight(i: number){
+  // Swap helper
+  function moveIndex(from: number, to: number) {
     setCards(cs => {
-      if (i >= cs.length-1) return cs;
-      const next = cs.slice(); const t = next[i+1]; next[i+1] = next[i]; next[i] = t; return next;
+      if (from === to || from < 0 || to < 0 || from >= cs.length || to >= cs.length) return cs;
+      const next = cs.slice();
+      const [item] = next.splice(from, 1);
+      next.splice(to, 0, item);
+      return next;
     });
   }
 
+  // Drag event handlers
+  function onDragStart(i: number, e: React.DragEvent) {
+    setDragIndex(i);
+    setOverIndex(i);
+    e.dataTransfer.setData('text/plain', String(i));
+    e.dataTransfer.effectAllowed = 'move';
+  }
+  function onDragOver(i: number, e: React.DragEvent) {
+    e.preventDefault(); // allow drop
+    if (overIndex !== i) setOverIndex(i);
+    e.dataTransfer.dropEffect = 'move';
+  }
+  function onDrop(i: number, e: React.DragEvent) {
+    e.preventDefault();
+    const from = dragIndex ?? parseInt(e.dataTransfer.getData('text/plain') || '-1', 10);
+    if (!Number.isFinite(from)) return;
+    moveIndex(from as number, i);
+    setDragIndex(null);
+    setOverIndex(null);
+  }
+  function onDragEnd() {
+    setDragIndex(null);
+    setOverIndex(null);
+  }
+
+  // SEO JSON-LD and Header Title (kept from v2.0)
   const jsonLd = {
     "@context": "https://schema.org",
     "@type": "WebApplication",
@@ -121,7 +154,6 @@ export default function Page() {
 
   return (
     <main className="space-y-6">
-      {/* JSON-LD for SEO */}
       <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }} />
 
       <h1 className="text-4xl font-extrabold text-blue-600">ポケカ プロキシメーカー(POKEMON CARD PROXY MAKER)</h1>
@@ -147,57 +179,73 @@ export default function Page() {
         <span>（基本エネルギーを除く(印刷するカード枚数): <b>{totalSelectedNoEnergy}</b> 枚）</span>
       </div>
 
-      {/* 4列カードグリッド */}
+      {/* 4列カードグリッド（ドラッグ＆ドロップ対応） */}
       <div className="grid grid-cols-4 gap-6">
-        {cards.map((c, i) => (
-          <div key={c.code} className="relative bg-white rounded-xl shadow border border-neutral-200 p-3">
-            {/* 操作バー（左矢印・チェック・右矢印） */}
-            <div className="absolute top-2 left-2 right-2 flex items-center justify-between pointer-events-none">
-              <button
-                onClick={() => moveLeft(i)}
-                disabled={i===0}
-                className={`pointer-events-auto w-6 h-6 rounded-full border bg-white text-xs grid place-items-center shadow ${i===0?'opacity-40 cursor-default':'hover:bg-neutral-50'}`}
-                title="左へ"
-              >◄</button>
-              <input
-                type="checkbox"
-                checked={!!c.selected}
-                onChange={()=>toggle(c.code)}
-                className="pointer-events-auto w-5 h-5 accent-blue-600"
-                title="選択"
-              />
-              <button
-                onClick={() => moveRight(i)}
-                disabled={i===cards.length-1}
-                className={`pointer-events-auto w-6 h-6 rounded-full border bg-white text-xs grid place-items-center shadow ${i===cards.length-1?'opacity-40 cursor-default':'hover:bg-neutral-50'}`}
-                title="右へ"
-              >►</button>
-            </div>
-
-            {/* 画像 */}
-            <div className="mt-6 mb-3 h-64 grid place-items-center">
-              {c.src ? (
-                <img src={c.src} alt={c.name} className="max-h-64 w-auto object-contain rounded-md border border-neutral-200"/>
-              ) : (
-                <div className="text-xs text-neutral-500">画像なし</div>
-              )}
-            </div>
-
-            {/* 枚数表示＆操作 */}
-            <div className="flex flex-col items-center gap-2">
-              <div className="text-lg font-semibold">{c.qty}</div>
-              <div className="flex items-center gap-2">
-                <button onClick={()=>inc(c.code,-1)} className="w-9 h-9 rounded-md border grid place-items-center">−</button>
+        {cards.map((c, i) => {
+          const isDrag = dragIndex === i;
+          const isOver = overIndex === i && dragIndex !== null && dragIndex !== i;
+          return (
+            <div
+              key={c.code}
+              className={
+                `relative bg-white rounded-xl shadow border border-neutral-200 p-3 ` +
+                `${isDrag ? 'opacity-60' : ''} ` +
+                `${isOver ? 'ring-2 ring-blue-400' : ''}`
+              }
+              draggable
+              onDragStart={(e) => onDragStart(i, e)}
+              onDragOver={(e) => onDragOver(i, e)}
+              onDrop={(e) => onDrop(i, e)}
+              onDragEnd={onDragEnd}
+            >
+              {/* 操作バー（左矢印・チェック・右矢印） */}
+              <div className="absolute top-2 left-2 right-2 flex items-center justify-between pointer-events-none">
+                <button
+                  onClick={() => setCards(cs => { if (i<=0) return cs; const next = cs.slice(); const t = next[i-1]; next[i-1] = next[i]; next[i] = t; return next; })}
+                  disabled={i===0}
+                  className={`pointer-events-auto w-6 h-6 rounded-full border bg-white text-xs grid place-items-center shadow ${i===0?'opacity-40 cursor-default':'hover:bg-neutral-50'}`}
+                  title="左へ"
+                >◄</button>
                 <input
-                  type="number" min={0} max={99} value={c.qty}
-                  onChange={e=>setQty(c.code, Number(e.target.value))}
-                  className="w-12 text-center rounded-md border py-1"
+                  type="checkbox"
+                  checked={!!c.selected}
+                  onChange={()=>toggle(c.code)}
+                  className="pointer-events-auto w-5 h-5 accent-blue-600"
+                  title="選択"
                 />
-                <button onClick={()=>inc(c.code, +1)} className="w-9 h-9 rounded-md border grid place-items-center">＋</button>
+                <button
+                  onClick={() => setCards(cs => { if (i >= cs.length-1) return cs; const next = cs.slice(); const t = next[i+1]; next[i+1] = next[i]; next[i] = t; return next; })}
+                  disabled={i===cards.length-1}
+                  className={`pointer-events-auto w-6 h-6 rounded-full border bg-white text-xs grid place-items-center shadow ${i===cards.length-1?'opacity-40 cursor-default':'hover:bg-neutral-50'}`}
+                  title="右へ"
+                >►</button>
+              </div>
+
+              {/* 画像 */}
+              <div className="mt-6 mb-3 h-64 grid place-items-center">
+                {c.src ? (
+                  <img src={c.src} alt={c.name} className="max-h-64 w-auto object-contain rounded-md border border-neutral-200"/>
+                ) : (
+                  <div className="text-xs text-neutral-500">画像なし</div>
+                )}
+              </div>
+
+              {/* 枚数表示＆操作 */}
+              <div className="flex flex-col items-center gap-2">
+                <div className="text-lg font-semibold">{c.qty}</div>
+                <div className="flex items-center gap-2">
+                  <button onClick={()=>inc(c.code,-1)} className="w-9 h-9 rounded-md border grid place-items-center">−</button>
+                  <input
+                    type="number" min={0} max={99} value={c.qty}
+                    onChange={e=>setQty(c.code, Number(e.target.value))}
+                    className="w-12 text-center rounded-md border py-1"
+                  />
+                  <button onClick={()=>inc(c.code, +1)} className="w-9 h-9 rounded-md border grid place-items-center">＋</button>
+                </div>
               </div>
             </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
     </main>
   );
